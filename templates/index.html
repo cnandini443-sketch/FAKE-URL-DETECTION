@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10131f">
+  <meta name="description" content="Locally classify URL risk with a trained Random Forest model.">
+  <title>Signal / URL Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script type="importmap">
+    {"imports":{"onnxruntime-web":"{{ url_for('static', filename='vendor/onnxruntime/ort.wasm.bundle.min.mjs') }}"}}
+  </script>
+  <script src="{{ url_for('static', filename='js/jsqr.min.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/script.js') }}" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <a class="brand" href="#scan" data-view="scan" aria-label="Signal home">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span>SIGNAL<span class="brand-sub">URL INTELLIGENCE</span></span>
+      </a>
+      <div class="side-label">WORKSPACE</div>
+      <nav class="nav-links">
+        <button class="nav-link active" data-view="scan"><span class="nav-icon">01</span>URL scanner</button>
+        <button class="nav-link" data-view="dashboard"><span class="nav-icon">02</span>Dashboard</button>
+        <button class="nav-link" data-view="history"><span class="nav-icon">03</span>Scan history</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="model-card">
+          <span class="status-dot" id="model-dot"></span>
+          <div><span class="model-label">MODEL STATUS</span><strong id="model-status">Checking model</strong></div>
+        </div>
+        <p class="sidebar-note">Analysis runs locally. Submitted URLs are never opened or fetched.</p>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div><span class="eyebrow">THREAT RESEARCH / LOCAL INSTANCE</span><h1 id="page-title">URL scanner</h1></div>
+        <div class="topbar-right"><span class="live-indicator"></span><span>OFFLINE ANALYSIS</span></div>
+      </header>
+
+      <section class="view active" id="view-scan" aria-labelledby="page-title">
+        <div class="scanner-layout">
+          <div class="scanner-copy">
+            <span class="section-tag"><span class="tag-line"></span>LINK ANALYSIS, WITHOUT THE CLICK</span>
+            <h2>Know what<br>you're <span>opening.</span></h2>
+            <p class="intro">Inspect URL structure and model-derived risk before a link reaches your browser. Nothing is visited during analysis.</p>
+
+            <div class="input-mode-tabs" role="tablist" aria-label="Inspection method">
+              <button type="button" class="mode-tab active" id="tab-manual" role="tab" aria-selected="true" data-tab="manual">
+                <span class="mode-icon">&#x2328;</span> Manual URL
+              </button>
+              <button type="button" class="mode-tab" id="tab-qr" role="tab" aria-selected="false" data-tab="qr">
+                <span class="mode-icon">&#x26F6;</span> QR Code Scanner
+              </button>
+            </div>
+
+            <!-- Manual URL Form -->
+            <div id="section-manual" class="input-section active">
+              <form id="scan-form" novalidate>
+                <label for="url-input">URL TO INSPECT</label>
+                <div class="url-entry">
+                  <span class="entry-prefix" aria-hidden="true">https://</span>
+                  <input id="url-input" name="url" type="text" inputmode="url" autocomplete="url" maxlength="2048" placeholder="example.com/path" required aria-describedby="url-help">
+                  <button type="submit" id="scan-button"><span>Analyze link</span><span aria-hidden="true">-&gt;</span></button>
+                </div>
+                <p id="url-help" class="field-help">HTTP and HTTPS links only. The scanner does not visit websites.</p>
+              </form>
+            </div>
+
+            <!-- QR Code Scanner Section -->
+            <div id="section-qr" class="input-section" hidden>
+              <div class="qr-panel">
+                <div class="qr-dropzone" id="qr-dropzone" tabindex="0" role="button" aria-label="Upload QR code image">
+                  <input type="file" id="qr-file-input" accept="image/*" hidden>
+                  <div class="qr-drop-inner">
+                    <div class="qr-icon-bubble">&#x1F4F7;</div>
+                    <strong>Upload QR Image</strong>
+                    <p>Drag and drop a QR image here or <span class="link-span">browse files</span></p>
+                    <small>Supports PNG, JPG, WEBP</small>
+                  </div>
+                </div>
+
+                <div class="qr-camera-bar">
+                  <button type="button" class="outline-button" id="qr-camera-btn">
+                    <span>&#x1F4F9; Scan with Camera</span>
+                  </button>
+                  <span class="camera-hint">Uses device camera locally</span>
+                </div>
+
+                <!-- Camera Viewfinder -->
+                <div class="camera-card" id="camera-card" hidden>
+                  <div class="camera-header">
+                    <span class="camera-title">LIVE QR SCANNER</span>
+                    <button type="button" class="icon-button" id="camera-close-btn" aria-label="Close camera">&#x2715;</button>
+                  </div>
+                  <div class="video-container">
+                    <video id="camera-video" playsinline autoplay muted></video>
+                    <canvas id="camera-canvas" hidden></canvas>
+                    <div class="scanner-guide">
+                      <div class="guide-corner tl"></div>
+                      <div class="guide-corner tr"></div>
+                      <div class="guide-corner bl"></div>
+                      <div class="guide-corner br"></div>
+                      <div class="laser-line"></div>
+                    </div>
+                  </div>
+                  <p class="camera-message" id="camera-status">Position the QR code within the target frame...</p>
+                </div>
+
+                <!-- Decoded QR URL Confirmation Card (Safe: do NOT open URL automatically) -->
+                <div class="qr-result-box" id="qr-result-box" hidden>
+                  <div class="qr-result-tag-row">
+                    <span class="qr-tag">&#x26F6; QR Code Decoded</span>
+                    <span class="qr-unverified">Unverified link · String analysis only</span>
+                  </div>
+                  <div class="decoded-group">
+                    <span class="decoded-label">Decoded URL:</span>
+                    <div class="decoded-url-text" id="qr-decoded-url"></div>
+                  </div>
+                  <div class="qr-action-row">
+                    <button type="button" class="primary-button" id="qr-analyze-btn">
+                      <span>Analyze QR URL</span>
+                      <span aria-hidden="true">-&gt;</span>
+                    </button>
+                    <button type="button" class="text-button" id="qr-reset-btn">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="inline-message" id="scan-message" role="status" aria-live="polite" hidden></div>
+          </div>
+
+          <div class="signal-visual" aria-hidden="true">
+            <div class="visual-orbit orbit-one"></div><div class="visual-orbit orbit-two"></div>
+            <div class="visual-cross cross-x"></div><div class="visual-cross cross-y"></div>
+            <div class="visual-core"><span class="core-ring"></span><span class="core-center">S</span></div>
+            <span class="visual-coordinate coord-a">45.512 / 03</span>
+            <span class="visual-coordinate coord-b">SIGNAL ACTIVE</span>
+            <span class="visual-coordinate coord-c">URL PATTERN ENGINE</span>
+            <span class="visual-axis axis-a"></span><span class="visual-axis axis-b"></span>
+          </div>
+        </div>
+
+        <section class="result-panel" id="result-panel" aria-live="polite" hidden>
+          <div class="result-heading">
+            <div>
+              <span class="eyebrow">LATEST ANALYSIS</span>
+              <h2>Inspection result</h2>
+            </div>
+            <button class="text-button" id="scan-another">Scan another URL <span aria-hidden="true">-&gt;</span></button>
+          </div>
+          <div id="result-content"></div>
+        </section>
+
+        <div class="method-strip">
+          <div><span class="method-number">01</span><span>STRUCTURE</span><small>18 URL features</small></div>
+          <div><span class="method-number">02</span><span>CLASSIFIER</span><small>Random Forest</small></div>
+          <div><span class="method-number">03</span><span>EXPLANATION</span><small>Explainable AI & Voice</small></div>
+          <p>Classification is a signal, not a guarantee. Verify sensitive links independently.</p>
+        </div>
+      </section>
+
+      <section class="view" id="view-dashboard" aria-labelledby="dashboard-heading" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">YOUR LOCAL INSTANCE</span><h2 id="dashboard-heading">Scan overview</h2></div>
+          <button class="outline-button" data-refresh="dashboard">Refresh data</button>
+        </div>
+        <div class="stats-grid">
+          <article class="stat-block stat-total"><span class="stat-label">TOTAL SCANS</span><strong id="stat-total">0</strong><span class="stat-foot">Saved on this device</span></article>
+          <article class="stat-block"><span class="stat-label">LEGITIMATE</span><strong id="stat-legitimate">0</strong><span class="stat-foot"><i class="mini-dot dot-green"></i>Low risk</span></article>
+          <article class="stat-block"><span class="stat-label">SUSPICIOUS</span><strong id="stat-suspicious">0</strong><span class="stat-foot"><i class="mini-dot dot-amber"></i>Medium risk</span></article>
+          <article class="stat-block"><span class="stat-label">HIGH RISK</span><strong id="stat-phishing">0</strong><span class="stat-foot"><i class="mini-dot dot-red"></i>Phishing alert</span></article>
+          <article class="stat-block"><span class="stat-label">QR SCANS</span><strong id="stat-qr">0</strong><span class="stat-foot"><i class="mini-dot dot-cyan"></i>Optical scan</span></article>
+          <article class="stat-block"><span class="stat-label">AVG RISK SCORE</span><strong id="stat-avg">0.0</strong><span class="stat-foot">/ 100 aggregate</span></article>
+        </div>
+        <div class="dashboard-grid">
+          <section class="data-section chart-section">
+            <div class="section-title-row">
+              <div><span class="eyebrow">CLASS DISTRIBUTION</span><h3>Scan outcomes</h3></div>
+              <span class="small-meta">From stored scans</span>
+            </div>
+            <div id="distribution-chart" class="distribution-chart"></div>
+            <p id="chart-empty" class="empty-state">Your scan distribution will appear here.</p>
+          </section>
+          <section class="data-section">
+            <div class="section-title-row">
+              <div><span class="eyebrow">LATEST ACTIVITY</span><h3>Recent scans</h3></div>
+              <button class="text-button" data-view="history">All history <span aria-hidden="true">-&gt;</span></button>
+            </div>
+            <div id="recent-scans" class="recent-list"></div>
+            <p id="recent-empty" class="empty-state">No scans saved yet.</p>
+          </section>
+        </div>
+        <p class="inline-message page-message" id="dashboard-message" role="status" hidden></p>
+      </section>
+
+      <section class="view" id="view-history" aria-labelledby="history-heading" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">LOCAL SQLITE RECORDS</span><h2 id="history-heading">Scan history</h2></div>
+          <div class="history-actions">
+            <button class="outline-button" data-refresh="history">Refresh</button>
+            <button class="danger-button" id="clear-history">Clear history</button>
+          </div>
+        </div>
+        <div class="history-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>URL</th>
+                <th>SOURCE</th>
+                <th>CLASSIFICATION</th>
+                <th>RISK SCORE</th>
+                <th>RISK LEVEL</th>
+                <th>KEY REASONS</th>
+                <th>SCANNED AT</th>
+              </tr>
+            </thead>
+            <tbody id="history-rows"></tbody>
+          </table>
+          <p class="empty-state" id="history-empty">No saved scans yet. Results appear here after a trained model completes a scan.</p>
+        </div>
+        <p class="inline-message page-message" id="history-message" role="status" hidden></p>
+      </section>
+
+      <footer class="page-footer author-footer">
+        <span class="footer-credit-label">Designed &amp; Developed by</span>
+        <span class="footer-credit-name">Chennaram Nandini</span>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Clear History Confirmation Dialog -->
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+    <form method="dialog">
+      <span class="eyebrow">PERMANENT ACTION</span>
+      <h2 id="confirm-title">Clear all scan history?</h2>
+      <p>This removes every saved scan from the local database.</p>
+      <div class="dialog-actions">
+        <button class="outline-button" value="cancel">Cancel</button>
+        <button class="danger-button" id="confirm-clear" value="confirm">Clear history</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Risk Alert Popup / Notification (Requirement 8) -->
+  <div class="alert-popup-backdrop" id="alert-popup" hidden role="dialog" aria-modal="true" aria-labelledby="popup-title">
+    <div class="alert-popup-modal" id="popup-modal">
+      <div class="popup-icon-wrap" id="popup-icon-wrap">
+        <span class="popup-icon" id="popup-icon">&#x26A0;</span>
+      </div>
+      <div class="popup-body">
+        <span class="popup-category" id="popup-category">SECURITY ALERT</span>
+        <h3 id="popup-title">PHISHING ALERT</h3>
+        <p id="popup-message">This URL has been identified as high risk. Do not enter passwords, OTPs, card details or other sensitive information.</p>
+        <div class="popup-meta-row">
+          <span class="popup-score-tag">Risk Score: <strong id="popup-score">0.0</strong>/100</span>
+          <span class="popup-level-tag" id="popup-level-tag">HIGH RISK</span>
+        </div>
+      </div>
+      <div class="popup-footer">
+        <button type="button" class="primary-button popup-dismiss" id="popup-dismiss">Acknowledge</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+
