@@ -2,4 +2,4 @@
 __pycache__/
 *.py[cod]
 database/*.db
-model/*.pkl
+
